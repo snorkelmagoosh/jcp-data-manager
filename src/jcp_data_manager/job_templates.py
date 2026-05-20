@@ -350,7 +350,7 @@ document.addEventListener("DOMContentLoaded", function () {
 
   const DEFAULT_IMG = "https://jobconnectionsproject.org/wp-content/uploads/2026/03/Sign-In-Large-Default.png";
   const HOVER_IMG = "https://jobconnectionsproject.org/wp-content/uploads/2026/03/Sign-In-Large-Hover.png";
-  const SKIP_KEY = "jcp_skip_login";
+  const VISIT_KEY = "jcp_visit_count_" + window.location.pathname;
 
   if (!overlay || !loginBtn || !skipBtn) {
     console.warn("Overlay elements missing");
@@ -401,7 +401,15 @@ document.addEventListener("DOMContentLoaded", function () {
       : {};
 
   const isConnected = Boolean(accountData.isConnected);
-  const skipped = safeGetLocalStorage(SKIP_KEY) === "true";
+  const wpLoggedIn = document.body.classList.contains("logged-in");
+
+  if (isConnected || wpLoggedIn) {
+    hideOverlay();
+    return;
+  }
+
+  const visitCount = parseInt(safeGetLocalStorage(VISIT_KEY) || "0", 10) + 1;
+  safeSetLocalStorage(VISIT_KEY, String(visitCount));
 
   const hoverPreload = new Image();
   hoverPreload.src = HOVER_IMG;
@@ -426,7 +434,7 @@ document.addEventListener("DOMContentLoaded", function () {
     });
   }
 
-  if (isConnected || skipped) {
+  if (visitCount % 2 === 0) {
     hideOverlay();
     return;
   }
@@ -436,7 +444,6 @@ document.addEventListener("DOMContentLoaded", function () {
   loginBtn.addEventListener("click", startLinkedInLogin);
 
   skipBtn.addEventListener("click", function () {
-    safeSetLocalStorage(SKIP_KEY, "true");
     hideOverlay();
   });
 });

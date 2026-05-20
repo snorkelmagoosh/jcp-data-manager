@@ -32,6 +32,7 @@ dependencies = [
   "pandas>=2.0.0",
   "python-dotenv>=0.21.0",
   "python-jobspy>=1.1.82",
+  "pyarrow>=24.0.0",
 ]
 
 [project.urls]

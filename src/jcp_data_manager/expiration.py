@@ -508,7 +508,7 @@ def score_soft_404_probabilities(
 
 
 def privatize_invalid_posts(
-    post_ids: list[int],
+    posts: dict[int, str],
     settings: WordPressSettings,
     *,
     sleep_seconds: float = 0.2,
@@ -516,10 +516,11 @@ def privatize_invalid_posts(
     auth = HTTPBasicAuth(settings.username, settings.app_password)
     results: dict[int, dict[str, Any]] = {}
 
-    for post_id in post_ids:
+    for post_id, title in posts.items():
+        updated_title = title if title.endswith(" [Expired]") else f"{title} [Expired]"
         response = requests.post(
             f"{settings.posts_endpoint}/{post_id}",
-            json={"status": "private"},
+            json={"status": "private", "title": updated_title},
             auth=auth,
             timeout=30,
         )
@@ -587,9 +588,10 @@ def run_expiration_check(
     )
 
     if privatize_invalid:
-        invalid_post_ids = report.filter(pl.col("is_invalid") == 1)["post_id"].to_list()
+        invalid_rows = report.filter(pl.col("is_invalid") == 1).select(["post_id", "title"])
+        invalid_posts = dict(zip(invalid_rows["post_id"].to_list(), invalid_rows["title"].to_list()))
         privatize_results = privatize_invalid_posts(
-            invalid_post_ids,
+            invalid_posts,
             wordpress_settings,
             sleep_seconds=sleep_seconds,
         )
