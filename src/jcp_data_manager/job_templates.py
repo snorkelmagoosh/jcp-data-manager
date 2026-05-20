@@ -176,7 +176,7 @@ function randomizeTreat() {
     randomizeGroup = 4;
   }
 
-  var adUrl = document.referrer;
+  var adUrl = window.location.href;
   localStorage.removeItem("adUrl");
   localStorage.setItem("adUrl", adUrl);
 
