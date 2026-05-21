@@ -70,11 +70,6 @@ def add_job_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--env-file", help="Optional path to a .env file.")
     parser.add_argument("--results-wanted", type=int, default=20, help="Number of JobSpy results wanted.")
     parser.add_argument(
-        "--no-linkedin",
-        action="store_true",
-        help="Post without the LinkedIn sign-in popup.",
-    )
-    parser.add_argument(
         "--skip-post",
         action="store_true",
         help="Scrape and save the enriched jobs output without posting drafts to WordPress.",
@@ -215,7 +210,6 @@ def handle_get_jobs_command(args: argparse.Namespace) -> None:
         wordpress_settings=wordpress_settings,
         output_path=args.output,
         results_wanted=args.results_wanted,
-        include_linkedin_popup=not args.no_linkedin,
         experiment=args.experiment,
         skip_post=args.skip_post,
         keyword_timeout=args.keyword_timeout,

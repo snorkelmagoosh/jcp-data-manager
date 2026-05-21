@@ -461,7 +461,7 @@ def default_jobs_output_path(
     return Path(filename)
 
 
-def _posting_result_from_response(response: requests.Response, *, include_linkedin_popup: bool) -> dict[str, object]:
+def _posting_result_from_response(response: requests.Response) -> dict[str, object]:
     try:
         payload = response.json()
     except ValueError:
@@ -475,7 +475,6 @@ def _posting_result_from_response(response: requests.Response, *, include_linked
         "wordpress_post_id": payload.get("id") if isinstance(payload, dict) else None,
         "wordpress_status_code": response.status_code,
         "wordpress_error": error_message,
-        "posted_with_linkedin_popup": include_linkedin_popup,
     }
 
 
@@ -483,7 +482,6 @@ def post_jobs_to_wordpress(
     df: pl.DataFrame,
     *,
     settings: WordPressSettings,
-    include_linkedin_popup: bool,
     experiment: int,
     status: str = "draft",
 ) -> pl.DataFrame:
@@ -492,7 +490,6 @@ def post_jobs_to_wordpress(
             pl.Series("wordpress_post_id", [], dtype=pl.Int64),
             pl.Series("wordpress_status_code", [], dtype=pl.Int64),
             pl.Series("wordpress_error", [], dtype=pl.Utf8),
-            pl.Series("posted_with_linkedin_popup", [], dtype=pl.Boolean),
         )
 
     results: list[dict[str, object]] = []
@@ -509,7 +506,6 @@ def post_jobs_to_wordpress(
         full_html = build_post_content(
             google_script=_safe_text(row["google_ad_scripts"]),
             generated_html=_safe_text(row["jcp_job_html"]),
-            include_linkedin_popup=include_linkedin_popup,
             experiment=experiment,
         )
         full_html = insert_navigation_urls_into_post_html(full_html, survey_url, similar_jobs_url)
@@ -528,13 +524,12 @@ def post_jobs_to_wordpress(
             auth=auth,
             timeout=30,
         )
-        results.append(_posting_result_from_response(response, include_linkedin_popup=include_linkedin_popup))
+        results.append(_posting_result_from_response(response))
 
     return df.with_columns(
         pl.Series("wordpress_post_id", [result["wordpress_post_id"] for result in results]),
         pl.Series("wordpress_status_code", [result["wordpress_status_code"] for result in results]),
         pl.Series("wordpress_error", [result["wordpress_error"] for result in results]),
-        pl.Series("posted_with_linkedin_popup", [result["posted_with_linkedin_popup"] for result in results]),
     )
 
 
@@ -547,7 +542,6 @@ def run_job_posting_pipeline(
     wordpress_settings: WordPressSettings | None = None,
     output_path: str | Path | None = None,
     results_wanted: int = 20,
-    include_linkedin_popup: bool = True,
     experiment: int,
     skip_post: bool = False,
     keyword_timeout: int = 10,
@@ -592,7 +586,6 @@ def run_job_posting_pipeline(
             final_df = post_jobs_to_wordpress(
                 final_df,
                 settings=wordpress_settings,
-                include_linkedin_popup=include_linkedin_popup,
                 experiment=experiment,
             )
 
