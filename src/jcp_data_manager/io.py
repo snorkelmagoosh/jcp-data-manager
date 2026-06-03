@@ -7,6 +7,8 @@ from pathlib import Path
 from typing import Any
 
 import polars as pl
+from google.oauth2 import service_account
+from googleapiclient.discovery import build
 
 
 def _read_json(path: str | Path) -> Any:
@@ -17,6 +19,17 @@ def _read_json(path: str | Path) -> Any:
         raise ValueError(f"Expected a file path, got: {file_path}")
     with file_path.open("r", encoding="utf-8") as handle:
         return json.load(handle)
+
+
+_INDEXING_SCOPES = ["https://www.googleapis.com/auth/indexing"]
+
+
+def notify_google_indexing(url: str, notification_type: str, credentials_file: str) -> None:
+    credentials = service_account.Credentials.from_service_account_file(
+        credentials_file, scopes=_INDEXING_SCOPES
+    )
+    service = build("indexing", "v3", credentials=credentials)
+    service.urlNotifications().publish(body={"url": url, "type": notification_type}).execute()
 
 
 def load_sessions_data(path: str | Path) -> pl.DataFrame:
