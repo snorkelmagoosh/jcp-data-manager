@@ -15,7 +15,7 @@ from bs4 import BeautifulSoup
 from requests.auth import HTTPBasicAuth
 
 from .config import GithubModelsSettings, WordPressSettings
-from .io import write_dataframe
+from .io import notify_google_indexing, write_dataframe
 from .job_templates import build_job_description_system_prompt, build_post_content
 
 
@@ -484,6 +484,7 @@ def post_jobs_to_wordpress(
     settings: WordPressSettings,
     experiment: int,
     status: str = "draft",
+    google_credentials_file: str | None = None,
 ) -> pl.DataFrame:
     if df.is_empty():
         return df.with_columns(
@@ -525,6 +526,10 @@ def post_jobs_to_wordpress(
             timeout=30,
         )
         results.append(_posting_result_from_response(response))
+        if response.ok and google_credentials_file:
+            post_url = response.json().get("link", "")
+            if post_url:
+                notify_google_indexing(post_url, "URL_UPDATED", google_credentials_file)
 
     return df.with_columns(
         pl.Series("wordpress_post_id", [result["wordpress_post_id"] for result in results]),
