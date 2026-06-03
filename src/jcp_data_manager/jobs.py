@@ -550,6 +550,7 @@ def run_job_posting_pipeline(
     experiment: int,
     skip_post: bool = False,
     keyword_timeout: int = 10,
+    google_credentials_file: str | None = None,
     now: datetime | None = None,
 ) -> tuple[pl.DataFrame, Path]:
     build_job_description_system_prompt(experiment)
@@ -592,6 +593,7 @@ def run_job_posting_pipeline(
                 final_df,
                 settings=wordpress_settings,
                 experiment=experiment,
+                google_credentials_file=google_credentials_file,
             )
 
     resolved_output = Path(output_path) if output_path else default_jobs_output_path(

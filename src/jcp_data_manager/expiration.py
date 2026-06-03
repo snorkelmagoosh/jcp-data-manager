@@ -556,6 +556,7 @@ def run_expiration_check(
     output_path: str | None = None,
     history_path: str | None = None,
     max_posts_to_check: int = DEFAULT_EXPIRATION_CHECK_LIMIT,
+    google_credentials_file: str | None = None,
 ) -> pl.DataFrame:
     posts = fetch_wordpress_posts(wordpress_settings, status=status, per_page=per_page)
     all_posts = posts_to_dataframe(posts)
@@ -599,6 +600,7 @@ def run_expiration_check(
             invalid_posts,
             wordpress_settings,
             sleep_seconds=sleep_seconds,
+            google_credentials_file=google_credentials_file,
         )
         report = report.with_columns(
             pl.Series(

@@ -10,6 +10,7 @@ from .config import (
     load_environment,
     load_gemini_settings,
     load_github_models_settings,
+    load_google_indexing_settings,
     load_wordpress_settings,
 )
 from .expiration import run_expiration_check
@@ -201,6 +202,10 @@ def handle_get_jobs_command(args: argparse.Namespace) -> None:
 
     github_settings = load_github_models_settings()
     wordpress_settings = None if args.skip_post else load_wordpress_settings(featured_media_id=args.featured_media_id)
+    try:
+        google_credentials_file = load_google_indexing_settings().credentials_file
+    except ValueError:
+        google_credentials_file = None
 
     jobs_df, output_path = run_job_posting_pipeline(
         occupation_title=args.occupation_title,
@@ -213,6 +218,7 @@ def handle_get_jobs_command(args: argparse.Namespace) -> None:
         experiment=args.experiment,
         skip_post=args.skip_post,
         keyword_timeout=args.keyword_timeout,
+        google_credentials_file=google_credentials_file,
     )
 
     print(f"Saved jobs output to {output_path}")
@@ -233,6 +239,10 @@ def handle_check_job_expiration_command(args: argparse.Namespace) -> None:
     load_environment(args.env_file)
     wordpress_settings = load_wordpress_settings()
     gemini_settings = load_gemini_settings()
+    try:
+        google_credentials_file = load_google_indexing_settings().credentials_file
+    except ValueError:
+        google_credentials_file = None
 
     report = run_expiration_check(
         wordpress_settings=wordpress_settings,
@@ -245,6 +255,7 @@ def handle_check_job_expiration_command(args: argparse.Namespace) -> None:
         output_path=args.output,
         history_path=args.history_path,
         max_posts_to_check=args.max_posts_to_check,
+        google_credentials_file=google_credentials_file,
     )
 
     invalid_count = int(report["is_invalid"].sum()) if "is_invalid" in report.columns and report.height else 0
