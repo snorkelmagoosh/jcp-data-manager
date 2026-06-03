@@ -89,3 +89,14 @@ def load_gemini_settings() -> GeminiSettings:
         api_key=_get_required_env("GEMINI_API_KEY"),
         model=model,
     )
+
+
+@dataclass(frozen=True)
+class GoogleIndexingSettings:
+    credentials_file: str
+
+
+def load_google_indexing_settings() -> GoogleIndexingSettings:
+    return GoogleIndexingSettings(
+        credentials_file=_get_required_env("GOOGLE_INDEXING_CREDENTIALS_FILE"),
+    )
