@@ -16,7 +16,7 @@ from bs4 import BeautifulSoup
 from requests.auth import HTTPBasicAuth
 
 from .config import GeminiSettings, WordPressSettings
-from .io import write_dataframe
+from .io import notify_google_indexing, write_dataframe
 
 
 logger = logging.getLogger(__name__)
@@ -512,6 +512,7 @@ def privatize_invalid_posts(
     settings: WordPressSettings,
     *,
     sleep_seconds: float = 0.2,
+    google_credentials_file: str | None = None,
 ) -> dict[int, dict[str, Any]]:
     auth = HTTPBasicAuth(settings.username, settings.app_password)
     results: dict[int, dict[str, Any]] = {}
@@ -534,6 +535,10 @@ def privatize_invalid_posts(
             "private_status_code": response.status_code,
             "private_error": None if response.ok else payload.get("message", response.text[:200]),
         }
+        if response.ok and google_credentials_file:
+            post_url = payload.get("link", "")
+            if post_url:
+                notify_google_indexing(post_url, "URL_DELETED", google_credentials_file)
         sleep(sleep_seconds)
 
     return results
