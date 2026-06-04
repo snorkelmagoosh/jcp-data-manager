@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 
 import polars as pl
-from google.oauth2 import service_account
+from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 
 
@@ -25,9 +25,7 @@ _INDEXING_SCOPES = ["https://www.googleapis.com/auth/indexing"]
 
 
 def notify_google_indexing(url: str, notification_type: str, credentials_file: str) -> None:
-    credentials = service_account.Credentials.from_service_account_file(
-        credentials_file, scopes=_INDEXING_SCOPES
-    )
+    credentials = Credentials.from_authorized_user_file(credentials_file, scopes=_INDEXING_SCOPES)
     service = build("indexing", "v3", credentials=credentials)
     service.urlNotifications().publish(body={"url": url, "type": notification_type}).execute()
 
