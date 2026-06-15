@@ -86,6 +86,16 @@ def add_job_arguments(parser: argparse.ArgumentParser) -> None:
         default=10,
         help="Timeout in seconds when checking job pages for qualification keywords.",
     )
+    parser.add_argument(
+        "--min-days-until-close",
+        type=int,
+        default=21,
+        help=(
+            "Minimum days until a job's detected closing date for it to be included.\n"
+            "Jobs where a closing date is found and is sooner than this threshold are skipped.\n"
+            "Jobs with no detected closing date are always included. Default: 21."
+        ),
+    )
 
 
 def add_expiration_arguments(parser: argparse.ArgumentParser) -> None:
@@ -218,6 +228,7 @@ def handle_get_jobs_command(args: argparse.Namespace) -> None:
         experiment=args.experiment,
         skip_post=args.skip_post,
         keyword_timeout=args.keyword_timeout,
+        min_days_until_close=args.min_days_until_close,
         google_credentials_file=google_credentials_file,
     )
 

@@ -20,6 +20,7 @@ from .job_templates import build_job_description_system_prompt, build_post_conte
 
 
 DEFAULT_JOB_SITES = ["indeed", "linkedin", "zip_recruiter", "google", "glassdoor"]
+AMAZON_CAP_FRACTION = 0.30
 DEFAULT_KEYWORDS = [
     "what you'll need",
     "qualifications",
@@ -30,6 +31,70 @@ DEFAULT_KEYWORDS = [
     "what you have",
     "what you'll bring",
 ]
+
+MIN_DAYS_UNTIL_CLOSE = 21
+
+_CLOSING_DATE_TRIGGERS = re.compile(
+    r"(?:closing\s+date|clos(?:e[sd]?|ing)|apply\s+by|application\s+deadline|"
+    r"deadline(?:\s+to\s+apply)?|last\s+day\s+to\s+apply|"
+    r"position\s+close[sd]?|job\s+close[sd]?)",
+    re.IGNORECASE,
+)
+
+_DATE_IN_TEXT = re.compile(
+    r"""
+    (?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|
+       Jul(?:y)?|Aug(?:ust)?|Sep(?:tember)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)
+    [\s,]+\d{1,2}(?:st|nd|rd|th)?[\s,]+\d{4}
+    |
+    \d{1,2}(?:st|nd|rd|th)?[\s]+
+    (?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|
+       Jul(?:y)?|Aug(?:ust)?|Sep(?:tember)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)
+    [\s,]+\d{4}
+    |
+    \d{4}-\d{2}-\d{2}
+    |
+    \d{1,2}/\d{1,2}/\d{4}
+    """,
+    re.IGNORECASE | re.VERBOSE,
+)
+
+_DATE_PARSE_FORMATS = [
+    "%B %d %Y",
+    "%b %d %Y",
+    "%d %B %Y",
+    "%d %b %Y",
+    "%Y-%m-%d",
+    "%m/%d/%Y",
+]
+
+
+def _try_parse_date(raw: str) -> datetime | None:
+    text = re.sub(r"(\d+)(?:st|nd|rd|th)", r"\1", raw)
+    text = re.sub(r"[,]+", " ", text)
+    text = re.sub(r"\s+", " ", text).strip()
+    for fmt in _DATE_PARSE_FORMATS:
+        try:
+            return datetime.strptime(text, fmt)
+        except ValueError:
+            continue
+    return None
+
+
+def extract_closing_date(html: str | None) -> datetime | None:
+    """Return the first closing/deadline date found in job ad HTML, or None if not detected."""
+    if not html:
+        return None
+    soup = BeautifulSoup(html, "html.parser")
+    text = soup.get_text(separator=" ")
+    for trigger in _CLOSING_DATE_TRIGGERS.finditer(text):
+        window = text[trigger.start(): trigger.start() + 300]
+        date_match = _DATE_IN_TEXT.search(window)
+        if date_match:
+            parsed = _try_parse_date(date_match.group())
+            if parsed:
+                return parsed
+    return None
 
 SIMILAR_JOBS_SYSTEM_PROMPT = """
 You assign a short search term for similar jobs.
@@ -109,6 +174,18 @@ STATE_NAME_TO_ABBREVIATION = {
 }
 
 
+def cap_amazon_jobs(df: pl.DataFrame, max_fraction: float = AMAZON_CAP_FRACTION) -> pl.DataFrame:
+    if df.is_empty() or "company" not in df.columns:
+        return df
+    is_amazon = pl.col("company").str.to_lowercase().str.contains("amazon")
+    amazon_rows = df.filter(is_amazon)
+    other_rows = df.filter(~is_amazon)
+    allowed = max(0, int(len(df) * max_fraction))
+    if len(amazon_rows) <= allowed:
+        return df
+    return pl.concat([other_rows, amazon_rows.head(allowed)])
+
+
 def _slugify(value: str) -> str:
     return value.strip().lower().replace(" ", "_")
 
@@ -149,6 +226,7 @@ def scrape_and_filter_jobs(
     results_wanted: int = 20,
     timeout: int = 10,
     keywords: Iterable[str] = DEFAULT_KEYWORDS,
+    min_days_until_close: int = MIN_DAYS_UNTIL_CLOSE,
     now: datetime | None = None,
 ) -> pl.DataFrame:
     from jobspy import scrape_jobs
@@ -177,23 +255,40 @@ def scrape_and_filter_jobs(
     if jobs_with_direct_links.is_empty():
         return jobs_with_direct_links
 
+    today = now or datetime.today()
+    cutoff = today + timedelta(days=min_days_until_close)
+
     qualification_flags: list[int] = []
     html_snapshots: list[str | None] = []
+    closing_dates: list[str | None] = []
+    closing_date_ok_flags: list[bool] = []
+
     for url in jobs_with_direct_links["job_url_direct"].to_list():
         if not url:
             qualification_flags.append(0)
             html_snapshots.append(None)
+            closing_dates.append(None)
+            closing_date_ok_flags.append(True)
             continue
 
         flag, html = page_contains_keywords(str(url), keywords, timeout=timeout)
+        closing_date = extract_closing_date(html)
         qualification_flags.append(flag)
         html_snapshots.append(html)
+        closing_dates.append(closing_date.date().isoformat() if closing_date else None)
+        closing_date_ok_flags.append(closing_date is None or closing_date >= cutoff)
 
     enriched = jobs_with_direct_links.with_columns(
         pl.Series("qualifications", qualification_flags),
         pl.Series("original_html", html_snapshots),
+        pl.Series("closing_date", closing_dates),
+        pl.Series("closing_date_ok", closing_date_ok_flags),
     )
-    return enriched.filter(pl.col("qualifications") == 1)
+    return (
+        enriched
+        .filter((pl.col("qualifications") == 1) & pl.col("closing_date_ok"))
+        .drop("closing_date_ok")
+    )
 
 
 def _safe_text(value: object) -> str:
@@ -334,15 +429,18 @@ def generate_job_post_html(df: pl.DataFrame, settings: GithubModelsSettings, *, 
     )
     system_prompt = build_job_description_system_prompt(experiment)
 
+    _MAX_DESC_CHARS = 6000
+
     html_responses: list[str] = []
     for row in df.select(["description", "title", "location"]).iter_rows(named=True):
+        description = _safe_text(row["description"])[:_MAX_DESC_CHARS]
         response = client.complete(
             messages=[
                 SystemMessage(system_prompt),
                 UserMessage(
                     f"Here is the job title: {_safe_text(row['title'])},"
                     f"the location is {_safe_text(row['location'])},"
-                    f"and the job description is: {_safe_text(row['description'])}"
+                    f"and the job description is: {description}"
                 ),
             ],
             model=settings.model,
@@ -529,7 +627,10 @@ def post_jobs_to_wordpress(
         if response.ok and google_credentials_file:
             post_url = response.json().get("link", "")
             if post_url:
-                notify_google_indexing(post_url, "URL_UPDATED", google_credentials_file)
+                try:
+                    notify_google_indexing(post_url, "URL_UPDATED", google_credentials_file)
+                except Exception as exc:
+                    print(f"  Warning: Google Indexing notification failed: {exc}")
 
     return df.with_columns(
         pl.Series("wordpress_post_id", [result["wordpress_post_id"] for result in results]),
@@ -550,6 +651,7 @@ def run_job_posting_pipeline(
     experiment: int,
     skip_post: bool = False,
     keyword_timeout: int = 10,
+    min_days_until_close: int = MIN_DAYS_UNTIL_CLOSE,
     google_credentials_file: str | None = None,
     now: datetime | None = None,
 ) -> tuple[pl.DataFrame, Path]:
@@ -561,8 +663,11 @@ def run_job_posting_pipeline(
         location=location,
         results_wanted=results_wanted,
         timeout=keyword_timeout,
+        min_days_until_close=min_days_until_close,
         now=now,
     )
+
+    filtered_jobs = cap_amazon_jobs(filtered_jobs)
 
     if filtered_jobs.is_empty():
         final_df = filtered_jobs
