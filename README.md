@@ -118,6 +118,16 @@ The `--history-path` flag is used to specify where the location of the state fil
 
 The `--max-posts-to-check` flag works as a limit for how many posts to check for expiring job ads. The default is 20.
 
+### Seniority spread probing
+
+This command scrapes and filters ads for one or more occupation x location cells the same way `get-jobs` does, classifies each ad into `entry`/`mid`/`senior` (title keywords first, years-of-experience stated in the ad body as a fallback), and reports the resulting tier spread per occupation. Use it before locking in occupation-specific seniority keyword lists or years-of-experience cutpoints in `seniority.py`, so those are set from an observed distribution of real ads rather than a guess.
+
+```bash
+jcp-data-manager check-seniority-spread --occupation-title "Paralegal" --occupation-title "Truck Driver" --location "Chicago, IL" --location "Boise, ID" --date-posted 9/1/2026
+```
+
+`--occupation-title` and `--location` can each be repeated; every occupation is probed against every location. Use `--output` to save the classified ad-level detail and `--summary-output` to save the aggregated occupation x tier table. Nothing is posted to WordPress by this command.
+
 
 ## Setting up Dev Repo
 If you chose to clone the repo use `git`, then you will also need `uv` for the environment

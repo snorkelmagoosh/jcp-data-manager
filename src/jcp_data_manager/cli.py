@@ -16,6 +16,7 @@ from .expiration import run_expiration_check
 from .io import write_dataframe
 from .jobs import run_job_posting_pipeline
 from .pipeline import run_pipeline
+from .seniority_probe import probe_seniority_spread, summarize_seniority_spread
 
 
 class CliHelpFormatter(argparse.RawTextHelpFormatter):
@@ -92,6 +93,38 @@ def add_job_arguments(parser: argparse.ArgumentParser) -> None:
     )
 
 
+def add_seniority_probe_arguments(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--occupation-title",
+        dest="occupation_titles",
+        action="append",
+        required=True,
+        help="Occupation title to probe. Repeat for multiple occupations.",
+    )
+    parser.add_argument(
+        "--location",
+        dest="locations",
+        action="append",
+        required=True,
+        help="Location to probe. Repeat for multiple locations (e.g. one big-market, one small-market city).",
+    )
+    parser.add_argument("--date-posted", required=True, help="Earliest date posted in MM/DD/YYYY format.")
+    parser.add_argument(
+        "--results-wanted",
+        type=int,
+        default=30,
+        help="Number of JobSpy results wanted per occupation x location cell.",
+    )
+    parser.add_argument(
+        "--keyword-timeout",
+        type=int,
+        default=10,
+        help="Timeout in seconds when checking job pages for qualification keywords.",
+    )
+    parser.add_argument("--output", help="Optional path to save the classified, ad-level detail.")
+    parser.add_argument("--summary-output", help="Optional path to save the occupation x tier summary table.")
+
+
 def add_expiration_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--env-file", help="Optional path to a .env file.")
     parser.add_argument("--output", help="Optional path to save the expiration report.")
@@ -131,9 +164,10 @@ def build_parser() -> argparse.ArgumentParser:
         description="CLI toolkit for JCP data management workflows.",
         epilog=(
             "Commands:\n"
-            "  clean-json-data       Cleans sessions json file and runs models to tease out race/age/gender from linkedin data.\n"
-            "  get-jobs              Scrape jobs, build JCP HTML, and optionally post to WordPress.\n"
-            "  check-job-expiration  Review existing WordPress posts for dead or soft-404 links.\n\n"
+            "  clean-json-data          Cleans sessions json file and runs models to tease out race/age/gender from linkedin data.\n"
+            "  get-jobs                 Scrape jobs, build JCP HTML, and optionally post to WordPress.\n"
+            "  check-job-expiration     Review existing WordPress posts for dead or soft-404 links.\n"
+            "  check-seniority-spread   Probe occupations for their entry/mid/senior ad spread.\n\n"
             "Use 'jcp-data-manager <command> --help' to see all options for a specific command."
         ),
         formatter_class=CliHelpFormatter,
@@ -186,6 +220,22 @@ def build_parser() -> argparse.ArgumentParser:
     )
     add_expiration_arguments(expiration_parser)
     expiration_parser.set_defaults(handler=handle_check_job_expiration_command)
+
+    seniority_parser = subparsers.add_parser(
+        "check-seniority-spread",
+        aliases=["seniority-spread"],
+        help="Probe occupations for their entry/mid/senior ad spread before locking in tier rules.",
+        description=(
+            "Scrape and filter ads for each occupation x location cell the same way get-jobs does,\n"
+            "classify each into entry/mid/senior, and report the tier spread per occupation.\n\n"
+            "Example:\n"
+            "  jcp-data-manager check-seniority-spread --occupation-title \"Paralegal\" "
+            "--location \"Chicago, IL\" --location \"Boise, ID\" --date-posted 9/1/2026"
+        ),
+        formatter_class=CliHelpFormatter,
+    )
+    add_seniority_probe_arguments(seniority_parser)
+    seniority_parser.set_defaults(handler=handle_check_seniority_spread_command)
 
     return parser
 
@@ -263,6 +313,32 @@ def handle_check_job_expiration_command(args: argparse.Namespace) -> None:
         print(f"Saved expiration report to {args.output}")
     if args.history_path and not same_output_and_history:
         print(f"Saved expiration history to {args.history_path}")
+
+
+def handle_check_seniority_spread_command(args: argparse.Namespace) -> None:
+    classified = probe_seniority_spread(
+        occupation_titles=args.occupation_titles,
+        locations=args.locations,
+        date_posted=args.date_posted,
+        results_wanted=args.results_wanted,
+        timeout=args.keyword_timeout,
+    )
+    summary = summarize_seniority_spread(classified)
+
+    print(f"Ads classified: {classified.height}")
+    if not summary.is_empty():
+        print(summary)
+    unclassified = 0
+    if "seniority_tier" in classified.columns and classified.height:
+        unclassified = int((classified["seniority_tier"] == "unclassified").sum())
+    print(f"Unclassified ads (no title keyword or years-of-experience match): {unclassified}")
+
+    if args.output:
+        write_dataframe(classified, args.output)
+        print(f"Saved classified ad detail to {args.output}")
+    if args.summary_output:
+        write_dataframe(summary, args.summary_output)
+        print(f"Saved seniority spread summary to {args.summary_output}")
 
 
 def main(argv: list[str] | None = None) -> None:
