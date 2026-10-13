@@ -255,6 +255,26 @@ _ADMINISTRATIVE_ASSISTANT_RULES = _rules(
     extra_senior=("executive", _ROMAN_III, _ROMAN_IV),
 )
 
+# Fixes a real false-positive found 2026-10-13 while checking a low/high
+# tier restructuring, not just a thin-sample guess: several round-3 ads
+# used what looks like one employer's internal leveling scheme ("Financial
+# Management Asc - E1", "...Sr - E3", "...Stf - E4") and the lowest rung
+# ("Asc - E1", almost certainly "Associate"/entry) was tagged SENIOR purely
+# because "Management" contains the shared "manag" stem -- the same
+# collision Food Service Manager needed a fix for, just via a department/
+# functional-area name ("Financial Management") instead of the occupation's
+# own title noun. Removing "manag" alone would also regress currently-
+# correct ads that were only catching "senior" via that same collision
+# ("...Sr - E3", "...Stf - E4" -- several real ads use "Sr"/"Stf" without
+# the "sr." the shared default expects) -- added back as their own
+# padded keywords so those don't fall to unclassified as a side effect.
+# "Asc" itself is deliberately NOT added as an entry keyword -- converting
+# it from wrongly-senior to unclassified is the correct minimal fix; mapping
+# a 3-letter abbreviation to entry from one employer's sample in this probe
+# would be guessing the same way Financial Analyst's numbered suffixes were
+# already found to be unreliable across employers.
+_FINANCIAL_ANALYST_RULES = _rules(remove_senior=("manag",), extra_senior=(" sr ", " stf "))
+
 OCCUPATION_SENIORITY_RULES: dict[str, OccupationSeniorityRules] = {
     "electrician": _ELECTRICIAN_RULES,
     "software developer": _SOFTWARE_DEVELOPER_RULES,
@@ -268,6 +288,7 @@ OCCUPATION_SENIORITY_RULES: dict[str, OccupationSeniorityRules] = {
     "registered nurse": _REGISTERED_NURSE_RULES,
     "administrative assistant": _ADMINISTRATIVE_ASSISTANT_RULES,
     "secretary": _ADMINISTRATIVE_ASSISTANT_RULES,
+    "financial analyst": _FINANCIAL_ANALYST_RULES,
 }
 # Deliberately left on DEFAULT_OCCUPATION_SENIORITY_RULES (no override, named
 # keywords only where applicable) -- not an oversight:
@@ -279,12 +300,12 @@ OCCUPATION_SENIORITY_RULES: dict[str, OccupationSeniorityRules] = {
 #     tracks CDL license class and vehicle type, not tenure (same-employer
 #     paired postings had overlapping, non-monotonic experience requirements
 #     and an inverted pay ceiling). No seniority signal to encode.
-#   - "financial analyst": the shared default keywords already classified the
-#     survey sample correctly (associate/intern -> entry, senior/lead/manag/
-#     principal -> senior) with no changes needed. Numbered suffixes
-#     ("Financial Analyst II") are contradictory across employers in the
-#     survey itself -- new-grad entry-level at one, paired with "Senior" at
-#     another -- so, as with Truck Driver, left unencoded rather than guessed.
+# Financial Analyst now has its own override above (the "manag"/"Financial
+# Management" fix), but its numbered suffixes are still deliberately
+# unencoded: ("Financial Analyst II") were found contradictory across
+# employers in the original survey -- new-grad entry-level at one, paired
+# with "Senior" at another -- so, as with Truck Driver, left unencoded
+# rather than guessed.
 
 
 # Occupations that don't get an entry/mid/senior split at all -- every ad
@@ -397,13 +418,37 @@ def classify_yoe_seniority(years: int | None, rules: OccupationSeniorityRules) -
     return "mid"
 
 
+# Occupations whose real entry/mid/senior classification result gets
+# collapsed into a coarser scheme afterward -- classification still runs
+# normally (title first, then years-of-experience), this only relabels the
+# *result*. Distinct from LUMPED_TIER_OCCUPATIONS, which skips
+# classification entirely; here the underlying signal is real, just
+# regrouped. Keys are the original tier, values are the replacement -- a
+# tier not listed (e.g. "unclassified") passes through unchanged.
+#   - "financial analyst": decided 2026-10-13 after checking the round-3
+#     probe data directly -- "mid" is barely a category at all (3 ads
+#     total, 2 of those from the years-of-experience fallback rather than
+#     a real title ladder, unlike e.g. Electrician's apprentice/journeyman/
+#     master). Entry and mid collapse into "low", senior stays as "high".
+#     Distinct labels, not literal "entry"/"senior" reuse -- same reason
+#     LUMPED_TIER_OCCUPATIONS uses "undifferentiated" rather than a real
+#     tier name: Tanner wants treatment x tier pooled across occupations,
+#     and relabeling merged ads with a real tier name would mix genuinely-
+#     mid ads into the pooled "entry" coefficient the same way lumping
+#     Loan Officer into "entry" would have.
+TIER_REMAP_OCCUPATIONS: dict[str, dict[str, str]] = {
+    "financial analyst": {"entry": "low", "mid": "low", "senior": "high"},
+}
+
+
 def classify_seniority(
     *,
     title: str | None,
     description: str | None,
     occupation_title: str,
 ) -> dict[str, object]:
-    """Classify one ad into entry/mid/senior/unclassified/undifferentiated.
+    """Classify one ad into entry/mid/senior/unclassified/undifferentiated,
+    or an occupation-specific remapped tier (see TIER_REMAP_OCCUPATIONS).
 
     Title keywords are checked first (the stronger signal when an occupation
     has a real title ladder, e.g. Paralegal I/II/III). Years-of-experience
@@ -417,21 +462,28 @@ def classify_seniority(
     which signal decided it, and what years-of-experience was actually found.
     """
     years = extract_years_of_experience(description)
+    occupation_key = occupation_title.strip().lower()
 
-    lumped_tier = LUMPED_TIER_OCCUPATIONS.get(occupation_title.strip().lower())
+    lumped_tier = LUMPED_TIER_OCCUPATIONS.get(occupation_key)
     if lumped_tier is not None:
         return {"seniority_tier": lumped_tier, "seniority_source": "lumped", "years_of_experience": years}
 
     rules = get_seniority_rules(occupation_title)
     title_tier = classify_title_seniority(title, rules)
     if title_tier is not None:
-        return {"seniority_tier": title_tier, "seniority_source": "title", "years_of_experience": years}
+        result = {"seniority_tier": title_tier, "seniority_source": "title", "years_of_experience": years}
+    else:
+        yoe_tier = classify_yoe_seniority(years, rules)
+        if yoe_tier is not None:
+            result = {"seniority_tier": yoe_tier, "seniority_source": "years_of_experience", "years_of_experience": years}
+        else:
+            result = {"seniority_tier": "unclassified", "seniority_source": None, "years_of_experience": years}
 
-    yoe_tier = classify_yoe_seniority(years, rules)
-    if yoe_tier is not None:
-        return {"seniority_tier": yoe_tier, "seniority_source": "years_of_experience", "years_of_experience": years}
+    remap = TIER_REMAP_OCCUPATIONS.get(occupation_key)
+    if remap is not None and result["seniority_tier"] in remap:
+        result = {**result, "seniority_tier": remap[result["seniority_tier"]]}
 
-    return {"seniority_tier": "unclassified", "seniority_source": None, "years_of_experience": years}
+    return result
 
 
 def classify_seniority_df(

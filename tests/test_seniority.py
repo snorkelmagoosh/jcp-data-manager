@@ -62,6 +62,27 @@ def test_loan_officer_assistant_is_entry() -> None:
     assert classify_title_seniority("Sr. Commercial Loan Officer", rules) == "senior"
 
 
+def test_financial_analyst_management_does_not_collide_with_senior() -> None:
+    # Regression found 2026-10-13: "Financial Management Asc - E1" (almost
+    # certainly an entry-level leveling code) was wrongly tagged senior
+    # purely because "Management" contains the shared "manag" stem -- the
+    # same class of bug Food Service Manager needed fixing for.
+    rules = get_seniority_rules("Financial Analyst")
+    assert classify_title_seniority("Financial Management Asc - E1", rules) is None
+    assert classify_title_seniority("Financial Management - E2", rules) is None
+
+
+def test_financial_analyst_still_catches_sr_and_stf_without_manag() -> None:
+    # Removing "manag" must not regress ads that were only catching senior
+    # via that collision -- "Sr"/"Stf" (no period, unlike the shared "sr.")
+    # are added back on their own merits from the same real ads.
+    rules = get_seniority_rules("Financial Analyst")
+    assert classify_title_seniority("Financial Management Sr - E3", rules) == "senior"
+    assert classify_title_seniority("Financial Management Stf - E4", rules) == "senior"
+    assert classify_title_seniority("Sr Analyst, Fin Business", rules) == "senior"
+    assert classify_title_seniority("Senior Financial Analyst", rules) == "senior"
+
+
 def test_credit_counselor_is_aliased_to_the_same_rules_as_loan_officer() -> None:
     assert get_seniority_rules("Credit Counselor") is get_seniority_rules("Loan Officer")
 
@@ -112,13 +133,19 @@ def test_secretary_is_aliased_to_the_same_rules_as_administrative_assistant() ->
     assert get_seniority_rules("Secretary") is get_seniority_rules("Administrative Assistant")
 
 
-def test_truck_driver_and_financial_analyst_have_no_override() -> None:
-    # Deliberate: Truck Driver's numbering tracks CDL class, not seniority;
-    # Financial Analyst already classifies correctly on shared defaults.
+def test_truck_driver_has_no_seniority_rules_override() -> None:
+    # Deliberate: Truck Driver's numbering tracks CDL class, not seniority
+    # (and it's lumped via LUMPED_TIER_OCCUPATIONS instead, a separate
+    # mechanism from this ladder entirely).
     assert "truck driver" not in OCCUPATION_SENIORITY_RULES
-    assert "financial analyst" not in OCCUPATION_SENIORITY_RULES
     assert get_seniority_rules("Truck Driver") is DEFAULT_OCCUPATION_SENIORITY_RULES
-    assert get_seniority_rules("Financial Analyst") is DEFAULT_OCCUPATION_SENIORITY_RULES
+
+
+def test_financial_analyst_now_has_a_seniority_rules_override() -> None:
+    # Added 2026-10-13 for the "manag"/"Financial Management" collision fix
+    # -- no longer on pure shared defaults, unlike Truck Driver.
+    assert "financial analyst" in OCCUPATION_SENIORITY_RULES
+    assert get_seniority_rules("Financial Analyst") is not DEFAULT_OCCUPATION_SENIORITY_RULES
 
 
 def test_extract_years_of_experience_takes_the_max_mentioned_figure() -> None:
@@ -285,6 +312,43 @@ def test_classify_seniority_still_extracts_years_for_a_lumped_occupation() -> No
     )
     assert result["seniority_tier"] == "undifferentiated"
     assert result["years_of_experience"] == 2
+
+
+def test_classify_seniority_remaps_financial_analyst_entry_and_mid_to_low() -> None:
+    # 2026-10-13: mid is barely a category for Financial Analyst (3 ads
+    # total in the round-3 probe), so entry and mid both collapse into
+    # "low" rather than keeping a separate, near-empty mid tier.
+    entry_ad = classify_seniority(
+        title="Finance and Accounting Associate", description="", occupation_title="Financial Analyst"
+    )
+    mid_ad = classify_seniority(
+        title="Budget Analyst, Intermediate", description="", occupation_title="Financial Analyst"
+    )
+    assert entry_ad["seniority_tier"] == "low"
+    assert mid_ad["seniority_tier"] == "low"
+    # seniority_source still reflects what actually drove the original
+    # classification, not the remap -- auditable either way.
+    assert entry_ad["seniority_source"] == "title"
+
+
+def test_classify_seniority_remaps_financial_analyst_senior_to_high() -> None:
+    result = classify_seniority(
+        title="Senior Financial Analyst", description="", occupation_title="Financial Analyst"
+    )
+    assert result["seniority_tier"] == "high"
+    assert result["seniority_source"] == "title"
+
+
+def test_classify_seniority_remap_does_not_touch_unclassified() -> None:
+    # "unclassified" isn't a key in the remap -- an ad with no signal at
+    # all for Financial Analyst stays unclassified, not "low".
+    result = classify_seniority(title="Analyst", description="Join our team!", occupation_title="Financial Analyst")
+    assert result["seniority_tier"] == "unclassified"
+
+
+def test_classify_seniority_remap_does_not_affect_unrelated_occupations() -> None:
+    result = classify_seniority(title="Mid-Level Paralegal", description="", occupation_title="Paralegal")
+    assert result["seniority_tier"] == "mid"
 
 
 def test_classify_seniority_does_not_lump_unrelated_occupations() -> None:
