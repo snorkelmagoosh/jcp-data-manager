@@ -251,11 +251,15 @@ def test_classify_seniority_lumps_truck_driver_into_one_tier_regardless_of_title
     # 2026-10-13 (Tanner): Truck Driver has no real tier signal at all, so
     # every ad is lumped into one tier instead of run through the ladder --
     # a title that would otherwise read as senior/entry/mid is ignored.
+    # Uses "undifferentiated", not a real tier label, since Tanner also
+    # wants treatment x tier pooled across occupations (confirmed same
+    # day) -- reusing "entry" would have distorted the pooled entry
+    # coefficient with Truck Driver's whole sample.
     senior_looking = classify_seniority(
         title="Senior Truck Driver", description="", occupation_title="Truck Driver"
     )
     plain = classify_seniority(title="Truck Driver", description="", occupation_title="Truck Driver")
-    assert senior_looking["seniority_tier"] == plain["seniority_tier"] == "entry"
+    assert senior_looking["seniority_tier"] == plain["seniority_tier"] == "undifferentiated"
     assert senior_looking["seniority_source"] == "lumped"
 
 
@@ -269,7 +273,7 @@ def test_classify_seniority_lumps_loan_officer_and_its_credit_counselor_alias() 
     aliased = classify_seniority(
         title="Sr. Commercial Loan Officer", description="", occupation_title="Credit Counselor"
     )
-    assert result["seniority_tier"] == aliased["seniority_tier"] == "entry"
+    assert result["seniority_tier"] == aliased["seniority_tier"] == "undifferentiated"
     assert result["seniority_source"] == aliased["seniority_source"] == "lumped"
 
 
@@ -279,7 +283,7 @@ def test_classify_seniority_still_extracts_years_for_a_lumped_occupation() -> No
     result = classify_seniority(
         title="Truck Driver", description="2+ years of experience required.", occupation_title="Truck Driver"
     )
-    assert result["seniority_tier"] == "entry"
+    assert result["seniority_tier"] == "undifferentiated"
     assert result["years_of_experience"] == 2
 
 

@@ -13,13 +13,25 @@ See seniority_probe.py for the preliminary check used to populate these.
 DECIDED (2026-10-13, Tanner): occupations with no clearly-defined tier
 structure, or where real ads are too thin to populate three tiers, don't need
 to be swapped out or forced through a classifier -- all of that occupation's
-ads can be lumped into a single tier instead of split entry/mid/senior. See
-LUMPED_TIER_OCCUPATIONS below. This only works if tier is always interacted
-with occupation in analysis (never pooled into one global treatment x tier
-coefficient) -- otherwise a lumped occupation's full sample sitting in one
-tier would contaminate that tier's pooled coefficient for every other
-occupation. Flagged to confirm with Tanner alongside this decision, not yet
-independently confirmed.
+ads can be lumped into a single bucket instead of split entry/mid/senior. See
+LUMPED_TIER_OCCUPATIONS below.
+
+CORRECTED (2026-10-13, same day): Tanner separately confirmed he wants
+treatment x tier pooled across occupations into one global coefficient, not
+interacted per-occupation. That changes how lumping has to work -- lumped
+ads are tagged "undifferentiated", a tier value distinct from entry/mid/
+senior, rather than reusing one of those three labels. "Undifferentiated"
+is excluded from the pooled entry/mid/senior heterogeneity comparison (same
+treatment as "unclassified" below) but still counts toward the main/overall
+treatment effect, and can be reported as its own occupation-specific effect
+separately. This keeps the pooled entry/mid/senior coefficients clean --
+built from occupations with a real tier structure only -- while still using
+every lumped occupation's ads. The original "reuse an existing label"
+choice (reusing "entry") was made before Tanner's pooling preference was
+confirmed and is no longer safe under pooling: a lumped occupation's full
+sample sitting inside the real "entry" bucket would have meant the pooled
+entry coefficient partly measured "this occupation in general" rather than
+a genuine cross-occupation entry-level effect.
 
 OPEN, UNRESOLVED (as of 2026-09-29): whether to add JobSpy's own `job_level`
 field (LinkedIn's entry/mid-senior/associate/director/executive taxonomy) as
@@ -276,10 +288,11 @@ OCCUPATION_SENIORITY_RULES: dict[str, OccupationSeniorityRules] = {
 
 
 # Occupations that don't get an entry/mid/senior split at all -- every ad
-# is lumped into the one tier named here, regardless of its title or stated
-# years of experience. Decided 2026-10-13 (Tanner): rather than swap these
-# occupations out or build a new classifier for them, it's fine for them not
-# to have jobs in every tier -- lump them into one instead.
+# is lumped into UNDIFFERENTIATED_TIER (not one of the real three tiers),
+# regardless of its title or stated years of experience. Decided 2026-10-13
+# (Tanner): rather than swap these occupations out or build a new classifier
+# for them, it's fine for them not to have jobs in every tier -- lump them
+# into one bucket instead.
 #   - "truck driver": no real tier signal exists at all (9/25 finding --
 #     "DRIVER I/II" tracks CDL class/vehicle type, not tenure).
 #   - "loan officer" / "credit counselor": real signal exists (title-based
@@ -287,13 +300,18 @@ OCCUPATION_SENIORITY_RULES: dict[str, OccupationSeniorityRules] = {
 #     audit) but at near-zero volume -- 0/6 occupation x tier x market-class
 #     cells passed the >=5-ad threshold in the round-3 probe, 4/6 were
 #     literal zero-ad cells.
-# "entry" is an arbitrary bucket choice, not a claim these are entry-level
-# roles -- meaningful only because tier is always interacted with occupation
-# in analysis (see the module docstring), never read as a standalone label.
+# Uses a dedicated tier value rather than reusing "entry" -- Tanner wants
+# treatment x tier pooled across occupations, not interacted per-occupation
+# (confirmed 2026-10-13, after this lumping decision), so a lumped
+# occupation's full sample can't sit inside a real tier label without
+# distorting that tier's pooled coefficient for every other occupation. See
+# the module docstring for how "undifferentiated" is meant to be used.
+UNDIFFERENTIATED_TIER = "undifferentiated"
+
 LUMPED_TIER_OCCUPATIONS: dict[str, str] = {
-    "truck driver": "entry",
-    "loan officer": "entry",
-    "credit counselor": "entry",
+    "truck driver": UNDIFFERENTIATED_TIER,
+    "loan officer": UNDIFFERENTIATED_TIER,
+    "credit counselor": UNDIFFERENTIATED_TIER,
 }
 
 
@@ -385,12 +403,15 @@ def classify_seniority(
     description: str | None,
     occupation_title: str,
 ) -> dict[str, object]:
-    """Classify one ad into entry/mid/senior/unclassified.
+    """Classify one ad into entry/mid/senior/unclassified/undifferentiated.
 
     Title keywords are checked first (the stronger signal when an occupation
     has a real title ladder, e.g. Paralegal I/II/III). Years-of-experience
     parsed from the ad body is the fallback -- the only signal available for
-    occupations whose titles don't vary at all (e.g. "Teacher").
+    occupations whose titles don't vary at all (e.g. "Teacher"). Occupations
+    in LUMPED_TIER_OCCUPATIONS skip both and always return "undifferentiated"
+    -- not to be confused with "unclassified" (extraction failed for an
+    occupation that otherwise has a real tier structure).
 
     Returns a dict rather than a bare label so the reasoning is auditable:
     which signal decided it, and what years-of-experience was actually found.

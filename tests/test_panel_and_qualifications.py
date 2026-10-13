@@ -48,6 +48,22 @@ def test_meets_all_qualifications_requires_both_tier_and_market_class() -> None:
     assert kept["seniority_tier"].to_list() == ["senior"]
 
 
+def test_meets_all_qualifications_keeps_undifferentiated_unlike_unclassified() -> None:
+    # "undifferentiated" (lumped-tier occupations, e.g. Truck Driver) is a
+    # deliberate design choice, not missing data like "unclassified" --
+    # it still counts toward the main/overall treatment effect, just
+    # excluded from the pooled entry/mid/senior heterogeneity comparison
+    # (that exclusion happens downstream, in analysis, not here).
+    df = pl.DataFrame(
+        {
+            "seniority_tier": ["undifferentiated", "unclassified"],
+            "market_class": ["big", "big"],
+        }
+    )
+    kept = meets_all_qualifications(df)
+    assert kept["seniority_tier"].to_list() == ["undifferentiated"]
+
+
 def _fake_scrape_and_filter_jobs(*, occupation_title, date_posted, location, results_wanted, timeout, now=None):
     # market_class is tagged from the search location (the argument above),
     # not any per-row "location" text a job board happens to return -- that's
