@@ -17,6 +17,9 @@ from requests.auth import HTTPBasicAuth
 from .config import GithubModelsSettings, WordPressSettings
 from .io import write_dataframe
 from .job_templates import build_job_description_system_prompt, build_post_content
+from .locations import get_market_class
+from .seniority import classify_seniority_df
+from .title_filters import filter_adjacent_titles
 
 
 DEFAULT_JOB_SITES = ["indeed", "linkedin", "zip_recruiter", "google", "glassdoor"]
@@ -150,13 +153,14 @@ def scrape_and_filter_jobs(
     timeout: int = 10,
     keywords: Iterable[str] = DEFAULT_KEYWORDS,
     now: datetime | None = None,
+    site_name: Iterable[str] = DEFAULT_JOB_SITES,
 ) -> pl.DataFrame:
     from jobspy import scrape_jobs
 
     hours_old = calculate_hours_old(date_posted, now=now)
 
     jobs = scrape_jobs(
-        site_name=DEFAULT_JOB_SITES,
+        site_name=site_name,
         search_term=occupation_title,
         google_search_term=f"{occupation_title} jobs near {location} since {date_posted}",
         location=location,
@@ -174,6 +178,7 @@ def scrape_and_filter_jobs(
         raise ValueError("Expected JobSpy output to include 'job_url_direct'.")
 
     jobs_with_direct_links = jobs_df.filter(pl.col("job_url_direct").is_not_null())
+    jobs_with_direct_links = filter_adjacent_titles(jobs_with_direct_links, occupation_title=occupation_title)
     if jobs_with_direct_links.is_empty():
         return jobs_with_direct_links
 
@@ -538,6 +543,39 @@ def post_jobs_to_wordpress(
     )
 
 
+def tag_qualifications(df: pl.DataFrame, *, occupation_title: str, location: str) -> pl.DataFrame:
+    """Add seniority_tier/seniority_source/years_of_experience and
+    market_class to a qualification-filtered jobs DataFrame.
+
+    This is the second qualification gate, after scrape_and_filter_jobs's
+    keyword check: an ad that passed the keyword filter has qualifications
+    *text*, but that alone doesn't say whether it fits the PAP's
+    occupation x seniority-tier x market-class design. market_class comes
+    from locations.py's curated lookup (None if the sourcing location isn't
+    in it yet -- see that module for how to extend it).
+    """
+    if df.is_empty():
+        return df.with_columns(pl.Series("market_class", [], dtype=pl.Utf8))
+
+    tagged = df.with_columns(pl.lit(occupation_title).alias("occupation_title"))
+    tagged = classify_seniority_df(tagged, occupation_title_column="occupation_title")
+    return tagged.with_columns(pl.lit(get_market_class(location)).alias("market_class"))
+
+
+def meets_all_qualifications(df: pl.DataFrame) -> pl.DataFrame:
+    """Keep only ads with a known seniority tier AND a known market class.
+
+    "Unclassified" tier or an unrecognized sourcing location both mean we
+    cannot place the ad in the occupation x tier x market-class design this
+    panel is built around -- see the 9/29 "unclassified ads" discussion.
+    Excluding them here is a default, not a settled research decision (that
+    question is still open); callers that want everything scraped+tagged
+    regardless should skip this filter (see require_full_classification on
+    run_job_posting_pipeline).
+    """
+    return df.filter((pl.col("seniority_tier") != "unclassified") & pl.col("market_class").is_not_null())
+
+
 def run_job_posting_pipeline(
     *,
     occupation_title: str,
@@ -551,6 +589,7 @@ def run_job_posting_pipeline(
     experiment: int,
     skip_post: bool = False,
     keyword_timeout: int = 10,
+    require_full_classification: bool = True,
     now: datetime | None = None,
 ) -> tuple[pl.DataFrame, Path]:
     build_job_description_system_prompt(experiment)
@@ -563,6 +602,11 @@ def run_job_posting_pipeline(
         timeout=keyword_timeout,
         now=now,
     )
+
+    if not filtered_jobs.is_empty():
+        filtered_jobs = tag_qualifications(filtered_jobs, occupation_title=occupation_title, location=location)
+        if require_full_classification:
+            filtered_jobs = meets_all_qualifications(filtered_jobs)
 
     if filtered_jobs.is_empty():
         final_df = filtered_jobs

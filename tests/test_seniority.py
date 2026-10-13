@@ -13,8 +13,112 @@ from jcp_data_manager.seniority import (
     classify_title_seniority,
     classify_yoe_seniority,
     extract_years_of_experience,
+    get_seniority_rules,
 )
 from jcp_data_manager.seniority_probe import probe_seniority_spread, summarize_seniority_spread
+
+
+def test_electrician_ladder_is_apprentice_journeyman_master() -> None:
+    assert classify_title_seniority("Apprentice Electrician", get_seniority_rules("Electrician")) == "entry"
+    assert classify_title_seniority("Journeyman Electrician", get_seniority_rules("Electrician")) == "mid"
+    assert classify_title_seniority("Non-Licensed Journeyman Electrician", get_seniority_rules("Electrician")) == "mid"
+    assert (
+        classify_title_seniority("Licensed Master Electrician", get_seniority_rules("Electrician")) == "senior"
+    )
+
+
+def test_software_developer_treats_staff_as_senior_unlike_accounting() -> None:
+    rules = get_seniority_rules("Software Developer")
+    assert classify_title_seniority("Staff Software Engineer", rules) == "senior"
+    assert classify_title_seniority("Entry Level C++ Software Engineer", rules) == "entry"
+
+
+def test_software_developer_yoe_high_min_raised_from_calibration_check() -> None:
+    # 9/29 calibration: real ads independently title-tagged "senior" had a
+    # median of 6.5 stated years (n=10) -- above the shared default of 5.
+    rules = get_seniority_rules("Software Developer")
+    assert classify_yoe_seniority(5, rules) == "mid"
+    assert classify_yoe_seniority(6, rules) == "mid"
+    assert classify_yoe_seniority(7, rules) == "senior"
+    # Unrelated occupations keep the shared default (5), unaffected by the
+    # Software Developer-specific override.
+    assert classify_yoe_seniority(5, get_seniority_rules("Accountant")) == "senior"
+
+
+def test_accountant_treats_staff_as_entry_unlike_software() -> None:
+    rules = get_seniority_rules("Accountant")
+    assert classify_title_seniority("Staff Accountant", rules) == "entry"
+    assert classify_title_seniority("Corporate Staff Accountant", rules) == "entry"
+    assert classify_title_seniority("Senior Accountant", rules) == "senior"
+
+
+def test_auditor_is_aliased_to_the_same_rules_as_accountant() -> None:
+    assert get_seniority_rules("Auditor") is get_seniority_rules("Accountant")
+
+
+def test_loan_officer_assistant_is_entry() -> None:
+    rules = get_seniority_rules("Loan Officer")
+    assert classify_title_seniority("Loan Officer Assistant", rules) == "entry"
+    assert classify_title_seniority("Sr. Commercial Loan Officer", rules) == "senior"
+
+
+def test_credit_counselor_is_aliased_to_the_same_rules_as_loan_officer() -> None:
+    assert get_seniority_rules("Credit Counselor") is get_seniority_rules("Loan Officer")
+
+
+def test_food_service_manager_plain_manager_title_is_mid_not_senior() -> None:
+    # Regression: the occupation's own base title ("Manager") collides with
+    # the shared "manag" senior stem -- without the override, the dominant
+    # real-world case (plain "Restaurant Manager"/"General Manager") would be
+    # misclassified as senior by default.
+    rules = get_seniority_rules("Food Service Manager")
+    assert classify_title_seniority("Restaurant Manager", rules) == "mid"
+    assert classify_title_seniority("General Manager", rules) == "mid"
+    assert classify_title_seniority("Assistant Manager", rules) == "entry"
+    assert classify_title_seniority("Regional Director of Operations", rules) == "senior"
+
+
+def test_paralegal_numbered_tiers_and_legal_assistant() -> None:
+    rules = get_seniority_rules("Paralegal")
+    assert classify_title_seniority("Legal Assistant", rules) == "entry"
+    assert classify_title_seniority("Paralegal II", rules) == "mid"
+    assert classify_title_seniority("Paralegal III", rules) == "senior"
+    # "Paralegal I" is deliberately left unencoded (thin survey evidence).
+    assert classify_title_seniority("Paralegal I", rules) is None
+
+
+def test_legal_assistant_is_aliased_to_the_same_rules_as_paralegal() -> None:
+    assert get_seniority_rules("Legal Assistant") is get_seniority_rules("Paralegal")
+
+
+def test_registered_nurse_clinical_ladder() -> None:
+    rules = get_seniority_rules("Registered Nurse")
+    assert classify_title_seniority("Staff Nurse I - Neuroscience Center (Float)", rules) == "entry"
+    assert classify_title_seniority("Registered Nurse Inpatient II - Treasure Valley Hospital", rules) == "mid"
+    assert classify_title_seniority("Registered Nurse III", rules) == "senior"
+    assert classify_title_seniority("Registered Nurse IV", rules) == "senior"
+
+
+def test_administrative_assistant_self_confirmed_numbering() -> None:
+    rules = get_seniority_rules("Administrative Assistant")
+    assert classify_title_seniority("Administrative Assistant II", rules) == "mid"
+    assert classify_title_seniority("Administrative Assistant III", rules) == "senior"
+    assert classify_title_seniority("Executive Assistant", rules) == "senior"
+    # "Administrative Assistant I" is deliberately left unencoded.
+    assert classify_title_seniority("Administrative Assistant I", rules) is None
+
+
+def test_secretary_is_aliased_to_the_same_rules_as_administrative_assistant() -> None:
+    assert get_seniority_rules("Secretary") is get_seniority_rules("Administrative Assistant")
+
+
+def test_truck_driver_and_financial_analyst_have_no_override() -> None:
+    # Deliberate: Truck Driver's numbering tracks CDL class, not seniority;
+    # Financial Analyst already classifies correctly on shared defaults.
+    assert "truck driver" not in OCCUPATION_SENIORITY_RULES
+    assert "financial analyst" not in OCCUPATION_SENIORITY_RULES
+    assert get_seniority_rules("Truck Driver") is DEFAULT_OCCUPATION_SENIORITY_RULES
+    assert get_seniority_rules("Financial Analyst") is DEFAULT_OCCUPATION_SENIORITY_RULES
 
 
 def test_extract_years_of_experience_takes_the_max_mentioned_figure() -> None:
@@ -35,6 +139,29 @@ def test_extract_years_of_experience_tolerates_a_filler_word_before_experience()
 def test_extract_years_of_experience_returns_none_when_absent() -> None:
     assert extract_years_of_experience("A great opportunity to join our team.") is None
     assert extract_years_of_experience(None) is None
+
+
+def test_extract_years_of_experience_ignores_company_history_boilerplate() -> None:
+    # Regression: real ads pulled 9/29 had company-legacy marketing copy
+    # ("over 100 years of battery experience", "more than 135 years of
+    # financial experience", "built on more than 50 years of experience")
+    # sitting in the same ad as, and outranking via max(), the real, much
+    # lower candidate requirement.
+    text = (
+        "With locations throughout the world, and over 100 years of battery "
+        "experience, EnerSys is a great place to work.\n"
+        "Qualifications:\n* 3-5 years progressive financial experience required."
+    )
+    assert extract_years_of_experience(text) == 5
+
+
+def test_extract_years_of_experience_ignores_industry_legacy_boilerplate_near_the_cap() -> None:
+    # Regression: a real ad said "over 40 years of experience in the
+    # hospitality industry" (industry/company legacy, not the candidate) --
+    # this slipped through the first, more permissive cap of 40 exactly
+    # because it landed right at the boundary.
+    text = "People Focused. Performance Driven. With over 40 years of experience in the hospitality industry."
+    assert extract_years_of_experience(text) is None
 
 
 def test_extract_years_of_experience_ignores_minimum_age_requirements() -> None:
@@ -67,6 +194,16 @@ def test_classify_title_seniority_matches_supervising_via_stem() -> None:
     # exact "supervisor" keyword.
     rules = DEFAULT_OCCUPATION_SENIORITY_RULES
     assert classify_title_seniority("Supervising Paralegal", rules) == "senior"
+
+
+def test_classify_title_seniority_matches_new_grad_phrases_as_entry() -> None:
+    # Added 9/29 after a real-title vocabulary search turned up "New Grad
+    # Staff Nurse", "New Graduate Registered Nurse", "Finance Graduate
+    # Program" as unclassified titles with an obvious entry signal.
+    rules = DEFAULT_OCCUPATION_SENIORITY_RULES
+    assert classify_title_seniority("New Graduate Registered Nurse", rules) == "entry"
+    assert classify_title_seniority("New Grad Staff Nurse - Family Medicine", rules) == "entry"
+    assert classify_title_seniority("Finance Graduate Program", rules) == "entry"
 
 
 def test_classify_title_seniority_matches_student_as_entry() -> None:
@@ -110,6 +247,48 @@ def test_classify_seniority_is_unclassified_without_any_signal() -> None:
     assert result["seniority_source"] is None
 
 
+def test_classify_seniority_lumps_truck_driver_into_one_tier_regardless_of_title() -> None:
+    # 2026-10-13 (Tanner): Truck Driver has no real tier signal at all, so
+    # every ad is lumped into one tier instead of run through the ladder --
+    # a title that would otherwise read as senior/entry/mid is ignored.
+    senior_looking = classify_seniority(
+        title="Senior Truck Driver", description="", occupation_title="Truck Driver"
+    )
+    plain = classify_seniority(title="Truck Driver", description="", occupation_title="Truck Driver")
+    assert senior_looking["seniority_tier"] == plain["seniority_tier"] == "entry"
+    assert senior_looking["seniority_source"] == "lumped"
+
+
+def test_classify_seniority_lumps_loan_officer_and_its_credit_counselor_alias() -> None:
+    # Unlike Truck Driver, Loan Officer's title-based signal isn't broken --
+    # it's just too thin in volume (0/6 cells passed the round-3 ad-count
+    # threshold) -- lumped for the same reason Tanner approved regardless.
+    result = classify_seniority(
+        title="Sr. Commercial Loan Officer", description="", occupation_title="Loan Officer"
+    )
+    aliased = classify_seniority(
+        title="Sr. Commercial Loan Officer", description="", occupation_title="Credit Counselor"
+    )
+    assert result["seniority_tier"] == aliased["seniority_tier"] == "entry"
+    assert result["seniority_source"] == aliased["seniority_source"] == "lumped"
+
+
+def test_classify_seniority_still_extracts_years_for_a_lumped_occupation() -> None:
+    # Lumping skips the tiering decision, not the underlying extraction --
+    # years_of_experience stays available for audit/reporting.
+    result = classify_seniority(
+        title="Truck Driver", description="2+ years of experience required.", occupation_title="Truck Driver"
+    )
+    assert result["seniority_tier"] == "entry"
+    assert result["years_of_experience"] == 2
+
+
+def test_classify_seniority_does_not_lump_unrelated_occupations() -> None:
+    result = classify_seniority(title="Senior Accountant", description="", occupation_title="Accountant")
+    assert result["seniority_tier"] == "senior"
+    assert result["seniority_source"] == "title"
+
+
 def test_classify_seniority_uses_occupation_specific_override(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setitem(
         OCCUPATION_SENIORITY_RULES,
@@ -125,8 +304,8 @@ def test_classify_seniority_uses_occupation_specific_override(monkeypatch: pytes
 def test_classify_seniority_df_adds_expected_columns() -> None:
     df = pl.DataFrame(
         {
-            "query_occupation": ["Paralegal", "Truck Driver"],
-            "title": ["Senior Paralegal", "Truck Driver"],
+            "query_occupation": ["Paralegal", "Elementary School Teacher"],
+            "title": ["Senior Paralegal", "Elementary School Teacher"],
             "description": ["", "2 years of experience required."],
         }
     )

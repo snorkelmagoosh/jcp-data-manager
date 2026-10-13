@@ -15,6 +15,7 @@ from .config import (
 from .expiration import run_expiration_check
 from .io import write_dataframe
 from .jobs import run_job_posting_pipeline
+from .panel import run_panel_pipeline, summarize_panel_coverage
 from .pipeline import run_pipeline
 from .seniority_probe import probe_seniority_spread, summarize_seniority_spread
 
@@ -91,6 +92,71 @@ def add_job_arguments(parser: argparse.ArgumentParser) -> None:
         default=10,
         help="Timeout in seconds when checking job pages for qualification keywords.",
     )
+    parser.add_argument(
+        "--allow-unclassified-ads",
+        action="store_true",
+        help=(
+            "Don't require a known seniority tier and market class before preparing/posting an ad "
+            "(default: only ads that clear both are posted -- this is a default, not a settled "
+            "research decision; see tag_qualifications()/meets_all_qualifications() in jobs.py)."
+        ),
+    )
+
+
+def add_panel_arguments(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--occupation-title",
+        dest="occupation_titles",
+        action="append",
+        required=True,
+        help="Occupation title to source. Repeat for multiple occupations.",
+    )
+    parser.add_argument(
+        "--location",
+        dest="locations",
+        action="append",
+        required=True,
+        help="Location to source from. Repeat for multiple locations.",
+    )
+    parser.add_argument("--date-posted", required=True, help="Earliest date posted in MM/DD/YYYY format.")
+    parser.add_argument(
+        "--experiment",
+        required=True,
+        type=int,
+        help="0 = non-experimental, 1 = treatment randomization flow. See get-jobs --help.",
+    )
+    parser.add_argument("--output-dir", required=True, help="Directory to save one output file per occupation x location cell.")
+    parser.add_argument("--env-file", help="Optional path to a .env file.")
+    parser.add_argument("--results-wanted", type=int, default=20, help="Number of JobSpy results wanted per cell.")
+    parser.add_argument("--keyword-timeout", type=int, default=10, help="Timeout in seconds for the qualification-keyword check.")
+    parser.add_argument(
+        "--allow-unclassified-ads",
+        action="store_true",
+        help="See get-jobs --help -- same meaning, applied across every cell in the panel.",
+    )
+    parser.add_argument(
+        "--post",
+        action="store_true",
+        help=(
+            "Actually create WordPress drafts. Omit this to scrape, classify, and save output for "
+            "every cell WITHOUT posting -- the safer default for a command that can touch dozens of "
+            "occupation x location combinations in one run."
+        ),
+    )
+    parser.add_argument(
+        "--no-linkedin",
+        action="store_true",
+        help="Post without the LinkedIn sign-in popup (only relevant with --post).",
+    )
+    parser.add_argument(
+        "--featured-media-id",
+        type=int,
+        help="Override WORDPRESS_FEATURED_MEDIA_ID (only relevant with --post).",
+    )
+    parser.add_argument(
+        "--summary-output",
+        help="Optional path to save the occupation x tier x market-class coverage summary (vs. the >=5-ad threshold).",
+    )
 
 
 def add_seniority_probe_arguments(parser: argparse.ArgumentParser) -> None:
@@ -166,6 +232,7 @@ def build_parser() -> argparse.ArgumentParser:
             "Commands:\n"
             "  clean-json-data          Cleans sessions json file and runs models to tease out race/age/gender from linkedin data.\n"
             "  get-jobs                 Scrape jobs, build JCP HTML, and optionally post to WordPress.\n"
+            "  run-panel                Run get-jobs automatically across a whole occupation x location panel.\n"
             "  check-job-expiration     Review existing WordPress posts for dead or soft-404 links.\n"
             "  check-seniority-spread   Probe occupations for their entry/mid/senior ad spread.\n\n"
             "Use 'jcp-data-manager <command> --help' to see all options for a specific command."
@@ -205,6 +272,24 @@ def build_parser() -> argparse.ArgumentParser:
     )
     add_job_arguments(jobs_parser)
     jobs_parser.set_defaults(handler=handle_get_jobs_command)
+
+    panel_parser = subparsers.add_parser(
+        "run-panel",
+        help="Run get-jobs automatically across every occupation x location cell in a panel.",
+        description=(
+            "Scrape, filter, classify (seniority tier + market class), and optionally post every\n"
+            "occupation x location combination given, saving one output file per cell plus a\n"
+            "combined coverage summary against the >=5-qualifying-ads-per-cell threshold.\n\n"
+            "Defaults to NOT posting (--post opts in) since this can touch many cells at once.\n\n"
+            "Example:\n"
+            "  jcp-data-manager run-panel --occupation-title Accountant --occupation-title Electrician "
+            "--location \"Chicago, IL\" --location \"Boise, ID\" --date-posted 9/17/2026 --experiment 1 "
+            "--output-dir ./panel-output"
+        ),
+        formatter_class=CliHelpFormatter,
+    )
+    add_panel_arguments(panel_parser)
+    panel_parser.set_defaults(handler=handle_run_panel_command)
 
     expiration_parser = subparsers.add_parser(
         "check-job-expiration",
@@ -269,6 +354,7 @@ def handle_get_jobs_command(args: argparse.Namespace) -> None:
         experiment=args.experiment,
         skip_post=args.skip_post,
         keyword_timeout=args.keyword_timeout,
+        require_full_classification=not args.allow_unclassified_ads,
     )
 
     print(f"Saved jobs output to {output_path}")
@@ -283,6 +369,42 @@ def handle_get_jobs_command(args: argparse.Namespace) -> None:
         )
         print(f"WordPress post attempts: {jobs_df.height}")
         print(f"WordPress posting failures: {failures}")
+
+
+def handle_run_panel_command(args: argparse.Namespace) -> None:
+    load_environment(args.env_file)
+
+    github_settings = load_github_models_settings()
+    wordpress_settings = (
+        load_wordpress_settings(featured_media_id=args.featured_media_id) if args.post else None
+    )
+
+    panel_df = run_panel_pipeline(
+        occupation_titles=args.occupation_titles,
+        locations=args.locations,
+        date_posted=args.date_posted,
+        github_settings=github_settings,
+        wordpress_settings=wordpress_settings,
+        output_dir=args.output_dir,
+        results_wanted=args.results_wanted,
+        include_linkedin_popup=not args.no_linkedin,
+        experiment=args.experiment,
+        skip_post=not args.post,
+        keyword_timeout=args.keyword_timeout,
+        require_full_classification=not args.allow_unclassified_ads,
+    )
+
+    print(f"\nTotal ads across the panel: {panel_df.height}")
+    if not args.post:
+        print("Skipped WordPress posting (pass --post to actually create drafts).")
+
+    summary = summarize_panel_coverage(panel_df)
+    if not summary.is_empty():
+        print("\nCoverage vs. the >=5-ad threshold (occupation x tier x market_class):")
+        print(summary)
+        if args.summary_output:
+            write_dataframe(summary, args.summary_output)
+            print(f"Saved coverage summary to {args.summary_output}")
 
 
 def handle_check_job_expiration_command(args: argparse.Namespace) -> None:
