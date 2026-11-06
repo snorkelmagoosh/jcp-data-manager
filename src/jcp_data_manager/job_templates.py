@@ -255,6 +255,14 @@ The Job Connections Project is a non-profit company that advertises open positio
 """.strip()
 
 
+# Appended after the job ad, so it renders directly above the theme's
+# Continue / No longer interested buttons. Links open in a new tab so leaving
+# to read a policy doesn't reload the post and re-run randomizeTreat().
+PRIVACY_TERMS_NOTICE = """
+<p style="font-size: 13px; text-align: center; margin-top: 12px;">To learn more about how we collect, use, and protect your information, please review our <a href="https://jobconnectionsproject.org/privacy-policy/" target="_blank" rel="noopener">Privacy Policy</a> and <a href="https://jobconnectionsproject.org/terms-and-conditions/" target="_blank" rel="noopener">Terms and Conditions</a>. By clicking one of the buttons below, you agree to both.</p>
+""".strip()
+
+
 EXPERIMENT_POST_BLOCKS = {
     0: NON_EXPERIMENTAL_POST_BLOCK,
     1: EXPERIMENT_1_POST_BLOCK,
@@ -651,4 +659,4 @@ def build_post_content(
 
     popup_block = LINKEDIN_POPUP_BLOCK if include_linkedin_popup else NO_LINKEDIN_POPUP_BLOCK
     base = f"{experiment_block}{popup_block}\n\n{COMMON_POST_FOOTER}"
-    return f"{build_google_html_block(google_script)}\n\n{base}\n\n{generated_html.strip()}"
+    return f"{build_google_html_block(google_script)}\n\n{base}\n\n{generated_html.strip()}\n\n{PRIVACY_TERMS_NOTICE}"

@@ -76,6 +76,22 @@ def test_experiment_zero_has_no_treatment_prompt_or_randomization() -> None:
     assert "Sign in with LinkedIn" in post_content
 
 
+@pytest.mark.parametrize("experiment", [0, 1])
+@pytest.mark.parametrize("include_linkedin_popup", [True, False])
+def test_privacy_terms_notice_follows_job_ad(experiment: int, include_linkedin_popup: bool) -> None:
+    post_content = build_post_content(
+        google_script="<script>google</script>",
+        generated_html="<p>body</p>",
+        include_linkedin_popup=include_linkedin_popup,
+        experiment=experiment,
+    )
+
+    assert post_content.endswith("you agree to both.</p>")
+    assert post_content.index("<p>body</p>") < post_content.index("Privacy Policy")
+    assert 'href="https://jobconnectionsproject.org/privacy-policy/"' in post_content
+    assert 'href="https://jobconnectionsproject.org/terms-and-conditions/"' in post_content
+
+
 def test_experiment_one_keeps_current_treatment_prompt() -> None:
     prompt = build_job_description_system_prompt(1)
     assert "Treatment text" in prompt
